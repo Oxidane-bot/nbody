@@ -118,38 +118,65 @@ double NBodySimulation::euclidean_distance(int i,int j){
     return distance;
 }
 
-double NBodySimulation::force_calculation (int i, int j, int direction){
-  // Euclidean distance
-  const double distance = sqrt(
-                               (x[j][0]-x[i][0]) * (x[j][0]-x[i][0]) +
-                               (x[j][1]-x[i][1]) * (x[j][1]-x[i][1]) +
-                               (x[j][2]-x[i][2]) * (x[j][2]-x[i][2])
-                               );;
-  const double distance3 = distance * distance * distance;
-  minDx = std::min( minDx,distance );
+// on_particle_idx: index of the particle the force is acting ON.
+// by_particle_idx: index of the particle EXERTING the force.
+// direction: 0 for x, 1 for y, 2 for z.
+// precomputed_distance: the pre-calculated distance between on_particle_idx and by_particle_idx.
+double NBodySimulation::force_calculation(int on_particle_idx, int by_particle_idx, int direction, double precomputed_distance) {
+    if (precomputed_distance == 0.0) {
+        return 0.0; // Avoid division by zero if distance is zero.
+    }
+    double distance3 = precomputed_distance * precomputed_distance * precomputed_distance;
+    // Handle cases where distance is extremely small, leading to distance3 being zero.
+    if (distance3 == 0.0) { 
+         return 0.0;
+    }
 
-  return (x[i][direction]-x[j][direction]) * mass[i]*mass[j] / distance3;
+    // The force ON on_particle_idx BY by_particle_idx has components proportional to 
+    // (x[by_particle_idx][direction] - x[on_particle_idx][direction]).
+    // The original code's force_calculation(j,i,dir) returned (x[j][dir]-x[i][dir])*m[j]*m[i]/d^3.
+    // To maintain this, if called as force_calculation(j, i, dir, dist),
+    // on_particle_idx = j, by_particle_idx = i.
+    // We need to return (x[on_particle_idx][direction] - x[by_particle_idx][direction]) * mass[on_particle_idx] * mass[by_particle_idx] / distance3
+    // to keep the existing summation logic in updateBody correct.
+    // (x[j_orig][dir] - x[i_orig][dir]) * mass[j_orig] * mass[i_orig] / d^3
+    return (x[on_particle_idx][direction] - x[by_particle_idx][direction]) * mass[on_particle_idx] * mass[by_particle_idx] / distance3;
 }
 
 double NBodySimulation::NBodySimulationMolecularForces(int i, int j, int direction) {
     double rij[3]; 
-    double rij_norm; 
-    double force_ij; 
-    double direction_vector; 
+    double rij_norm_sq = 0.0;
 
- 
     for (int d = 0; d < 3; d++) {
         rij[d] = x[i][d] - x[j][d];
+        rij_norm_sq += rij[d] * rij[d];
     }
 
-    rij_norm = sqrt(rij[0]*rij[0] + rij[1]*rij[1] + rij[2]*rij[2]);
+    if (rij_norm_sq == 0.0) { // If distance is zero
+        return 0.0;
+    }
+    double rij_norm = sqrt(rij_norm_sq);
+
+    // Denominators for the force formula terms
+    double d_pow9 = pow(rij_norm, 9);
+    double d_pow13 = pow(rij_norm, 13);
+
+    // If rij_norm is so small that powers result in zero (underflow) or infinity (overflow, less likely for positive powers)
+    // or if rij_norm itself is zero (already handled by rij_norm_sq check for exact zero),
+    // prevent division by zero.
+    if (d_pow9 == 0.0 || d_pow13 == 0.0) {
+        // This implies rij_norm is extremely small. The force would be theoretically huge.
+        // Returning 0.0 to avoid NaN/inf, though a large capped value might be more "physical"
+        // depending on the simulation's needs for such close encounters.
+        return 0.0; 
+    }
+
+    double force_magnitude = 10.0 * ((0.1 / d_pow13) - (0.1 / d_pow9)) * rij_norm;
     
+    // The final division by rij_norm for component is safe because rij_norm is not zero here.
+    double force_component = force_magnitude * rij[direction] / rij_norm;
 
-    force_ij = 10 * ((0.1 / pow(rij_norm, 13)) - (0.1 / pow(rij_norm, 9))) * rij_norm;
-
-    direction_vector = force_ij * rij[direction] / rij_norm;
-
-    return direction_vector;
+    return force_component;
 }
 
 void NBodySimulation::updateBody () {
@@ -161,16 +188,19 @@ void NBodySimulation::updateBody () {
   double half_dt = timeStepSize/2;
 
 // compute half an Euler time step for dV --------------------------------------
-  double* force0 = new double[NumberOfBodies]{0,0};
-  double* force1 = new double[NumberOfBodies]{0,0};
-  double* force2 = new double[NumberOfBodies]{0,0};
+  double* force0 = new double[NumberOfBodies]();
+  double* force1 = new double[NumberOfBodies]();
+  double* force2 = new double[NumberOfBodies]();
 
     for (int i = 0; i < NumberOfBodies; i++) {
       for (int j = i+1; j < NumberOfBodies; j++) {
+          
+          const double distance = this->euclidean_distance(i, j);
+          minDx = std::min(minDx, distance);
 
-          double Fx = force_calculation(j, i, 0);
-          double Fy = force_calculation(j, i, 1);
-          double Fz = force_calculation(j, i, 2);
+          double Fx = force_calculation(j, i, 0, distance);
+          double Fy = force_calculation(j, i, 1, distance);
+          double Fz = force_calculation(j, i, 2, distance);
 
 
           force0[i] += Fx;
@@ -206,9 +236,12 @@ void NBodySimulation::updateBody () {
   for (int i = 0; i < NumberOfBodies; i++) {
       for (int j = i+1; j < NumberOfBodies; j++) {
 
-          double Fx = force_calculation(j, i, 0);
-          double Fy = force_calculation(j, i, 1);
-          double Fz = force_calculation(j, i, 2);
+          const double distance = this->euclidean_distance(i, j);
+          minDx = std::min(minDx, distance);
+
+          double Fx = force_calculation(j, i, 0, distance);
+          double Fy = force_calculation(j, i, 1, distance);
+          double Fz = force_calculation(j, i, 2, distance);
 
 
           force0[i] += Fx;
@@ -234,25 +267,61 @@ void NBodySimulation::updateBody () {
   }
 
   //coll
-   double C = 0.01/NumberOfBodies;
+   // C_factor calculation as before, ensuring it's defined based on current NumberOfBodies.
+   double C_factor = (NumberOfBodies > 0) ? 0.01/NumberOfBodies : 0.0;
+
     for (int i = 0; i < NumberOfBodies; i++) {
       for (int j = i+1; j < NumberOfBodies; j++) {
-          // std::cout <<euclidean_distance(i,j) <<"   " <<C*(mass[i]+mass[j]) <<std::endl;
-          // std::cout <<i<<"   " <<j <<std::endl;
-          if (euclidean_distance(i,j) <= C*(mass[i]+mass[j])){
-            std::cout << "colled " <<std::endl;
-            //do coll
-            for (int direction =0;direction <= 2 ;direction++ ){
-              x[i][direction]= (mass[i]*x[i][direction]+mass[j]*x[j][direction])/(mass[i]+mass[j]);
-              v[i][direction]= (mass[i]*v[i][direction]+mass[j]*v[j][direction])/(mass[i]+mass[j]);
-              
-            }
-            mass[i] = mass[i] + mass[j];
-            x[j] = x[NumberOfBodies-1];
-            v[j] = v[NumberOfBodies-1];
-            mass[j] = mass[NumberOfBodies-1];
-            NumberOfBodies--;
+          // Safety break if all bodies somehow get eliminated (though unlikely with this logic)
+          if (NumberOfBodies == 0) break; 
+
+          double threshold_distance = C_factor * (mass[i] + mass[j]);
+
+          if (euclidean_distance(i,j) <= threshold_distance){
+            std::cout << "Collision between body " << i << " and body " << j << std::endl;
             
+            // Calculate new properties for body i (merged body)
+            // Important: Use the state of mass[i] *before* it's updated for the weighted average.
+            double old_mass_i = mass[i];
+            double combined_mass = old_mass_i + mass[j];
+            
+            if (combined_mass == 0) { 
+                std::cerr << "Error: Combined mass is zero during collision between " << i << " and " << j << ". Skipping collision." << std::endl;
+                continue; 
+            }
+
+            for (int direction = 0; direction <= 2; direction++) {
+                x[i][direction] = (old_mass_i*x[i][direction] + mass[j]*x[j][direction]) / combined_mass;
+                v[i][direction] = (old_mass_i*v[i][direction] + mass[j]*v[j][direction]) / combined_mass;
+            }
+            mass[i] = combined_mass; // Update mass of body i
+
+            // Now handle removal of body j
+            // 1. Free memory of the particle that is disappearing (original body j)
+            delete[] x[j];
+            delete[] v[j];
+
+            int lastBodyIndex = NumberOfBodies - 1; // This is the index of the last particle *before* decrementing NumberOfBodies
+
+            // 2. If j is not the last particle, move data from last particle to slot j
+            if (j < lastBodyIndex) {
+                x[j] = x[lastBodyIndex];
+                v[j] = v[lastBodyIndex];
+                mass[j] = mass[lastBodyIndex];
+                // The pointers x[lastBodyIndex] and v[lastBodyIndex] are now effectively stale
+                // as their content has been moved. They will be outside the valid range
+                // after NumberOfBodies is decremented. No need to null them.
+            }
+            // If j == lastBodyIndex, its memory was freed, and no data needs to be moved.
+            // The slot x[lastBodyIndex], v[lastBodyIndex] is now gone.
+
+            // 3. Decrement number of bodies
+            NumberOfBodies--;
+
+            // 4. Adjust loop variable j
+            // This ensures that if a body was moved into slot j, it gets checked against body i.
+            // It also correctly adjusts for the reduced size of NumberOfBodies for subsequent iterations.
+            j--; 
           }
       }
   }

@@ -84,7 +84,11 @@ class NBodySimulation {
    *
    * The current force is gravity, i.e. (x_i-x_j) * m_i * m_j/r^3.
    **/
-  double force_calculation (int i, int j, int direction);
+  // on_particle_idx: index of the particle the force is acting ON.
+  // by_particle_idx: index of the particle EXERTING the force.
+  // direction: 0 for x, 1 for y, 2 for z.
+  // precomputed_distance: the pre-calculated distance between on_particle_idx and by_particle_idx.
+  double force_calculation (int on_particle_idx, int by_particle_idx, int direction, double precomputed_distance);
   double euclidean_distance(int i,int j);
   /**
    * Implement timestepping scheme and force updates.

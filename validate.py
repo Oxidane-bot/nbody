@@ -166,6 +166,90 @@ def step4(compiler):
             exit()
 
 
+def step_collision_test(compiler):
+    print("--------------------------------------------------------------------------------")
+    print("Running Step: Collision Test")
+    print("--------------------------------------------------------------------------------")
+    test = Test.Test(compiler, "step-1") # Using step-1 as base, can be any valid compiled step
+    test.cleanall()
+
+    arguments_compile = "CXXFLAGS=\"--std=c++0x -O3\"" 
+    result = test.compile(arguments_compile)
+    if result == 1:
+        print(f"Collision Test: Compiled source code with {arguments_compile} ... ok")
+    else:
+        print(f"Collision Test: Compiled source code with {arguments_compile} ... failed: {test.last_output}")
+        exit()
+
+    # P1: pos=(-0.1,0,0) vel=(0.1,0,0) mass=1.0
+    # P2: pos=(0.1,0,0) vel=(-0.1,0,0) mass=1.0
+    # They should collide at t=1.0 at origin (0,0,0) if dt is small enough.
+    # Collision threshold C factor is 0.01/NumberOfBodies = 0.01/2 = 0.005.
+    # Collision distance is C_factor * (m1+m2) = 0.005 * 2 = 0.01.
+    # Particles start 0.2 apart. At t=0.5, they are 0.1 apart. At t=0.9, they are 0.02 apart. At t=0.95, they are 0.01 apart (collision!)
+    # A dt=0.001 should be fine. tFinal=1.0 gives enough time.
+    sim_args = "0.01 1.0 0.001  -0.1 0.0 0.0  0.1 0.0 0.0  1.0   0.1 0.0 0.0  -0.1 0.0 0.0  1.0"
+    print(f"Collision Test: Running simulation with arguments: {sim_args}")
+    
+    result = test.run(sim_args)
+    if result == 1:
+        print("Collision Test: Simulation run terminated successfully ... ok")
+    else:
+        print(f"Collision Test: Simulation run failed: {test.last_output}")
+        exit()
+
+    # Validate Number of Remaining Objects
+    # Using re.search because findall would return a list of all matches. We expect one.
+    num_objects_match = re.search(r"Number of remaining objects: (\d+)", test.last_output)
+    if num_objects_match:
+        num_objects = int(num_objects_match.group(1))
+        if num_objects == 1:
+            print(f"Collision Test: Number of remaining objects {num_objects} ... ok")
+        else:
+            print(f"Collision Test: Expected 1 remaining object, got {num_objects} ... failed")
+            print("Full output:")
+            print(test.last_output)
+            exit()
+    else:
+        print("Collision Test: Could not find 'Number of remaining objects' in output ... failed")
+        print("Full output:")
+        print(test.last_output)
+        exit()
+
+    # Validate Position of Remaining Object
+    position_match = re.search(r"Position of first remaining object: ([-\d\.eE]+), *([-\d\.eE]+), *([-\d\.eE]+)", test.last_output)
+    if position_match:
+        px_str, py_str, pz_str = position_match.group(1), position_match.group(2), position_match.group(3)
+        try:
+            px, py, pz = float(px_str), float(py_str), float(pz_str)
+            expected_pos = (0.0, 0.0, 0.0)
+            tolerance = 1e-4 # Adjusted tolerance
+            
+            # Check if all components are close to expected
+            # The merged particle should have zero momentum and thus remain at the collision point (origin)
+            # if the simulation conserves momentum correctly and the setup is symmetric.
+            if all(abs(expected_pos[k] - [px,py,pz][k]) < tolerance for k in range(3)):
+                print(f"Collision Test: Position of merged particle ({px:.2e}, {py:.2e}, {pz:.2e}) ... ok")
+            else:
+                print(f"Collision Test: Position of merged particle ({px:.2e}, {py:.2e}, {pz:.2e}) not as expected ({expected_pos[0]:.2e}, {expected_pos[1]:.2e}, {expected_pos[2]:.2e}) within tolerance {tolerance} ... failed")
+                print("Full output:")
+                print(test.last_output)
+                exit()
+        except ValueError:
+            print(f"Collision Test: Could not parse position components to float: {px_str}, {py_str}, {pz_str} ... failed")
+            print("Full output:")
+            print(test.last_output)
+            exit()
+    else:
+        print("Collision Test: Could not find 'Position of first remaining object' in output ... failed")
+        print("Full output:")
+        print(test.last_output)
+        exit()
+    print("--------------------------------------------------------------------------------")
+    print("Step: Collision Test successfully completed!")
+    print("--------------------------------------------------------------------------------")
+
+
 if __name__ == "__main__":
     print("""
  This is a small Python script to check that the format of a submission is
@@ -195,6 +279,8 @@ if __name__ == "__main__":
         step3(compiler)
         print("Checking step 4")
         step4(compiler)
+        print("Checking Step Collision Test")
+        step_collision_test(compiler)
 
     except BaseException as err:
         print(f"Unexpected {err=}, {type(err)=}")

@@ -97,7 +97,7 @@ class Test(object):
         self.last_output = "ERROR: tried to run code with " + arguments + " and got " + str(returnCode.stderr)
         return 0
       else:
-        self.last_output = returnCode.stdout.decode(encoding).splitlines()[-1]
+        self.last_output = returnCode.stdout.decode(encoding) # Store full output
         self.runtime     = time.time() - start_solution
         return 1
     except Exception as e:
